@@ -1,0 +1,300 @@
+#!/usr/bin/env python
+
+# Simple command line Python DVD ripper
+# copyright (c) 2011 V. Harishankar
+# Licensed under the GNU/GPL v3
+
+import os, os.path, sys, subprocess
+# try importing readline if available
+try:
+  import readline
+except ImportError:
+  pass
+
+def get_bitrate ():
+	# get the video bitrate to encode
+	sbitrate = raw_input ("Video bitrate (kb/s) [800]: ")
+	try:
+	  bitrate = int (sbitrate)
+	except ValueError:
+	  bitrate = 800
+	return bitrate
+
+def get_video_scale ():
+	# Ask the user if video should be scaled?
+	scale = raw_input ("Scale video? [N]: ")
+	width = 0
+	height = 0
+	# default to No
+	if scale.strip () == "":
+		scale = "N"
+
+	if scale == "Y" or scale == "y":
+		# get width and height
+		swidth = raw_input ("Width: ")
+		sheight = raw_input ("Height: ")
+		# convert to number, if cannot abort scaling
+		try:
+			width, height = int (swidth), int (sheight)
+		except ValueError:
+			print "Invalid width/height. Resetting to original."
+			width, height = 0, 0
+			scale = "N"
+
+	return scale, width, height
+
+def rip_dvd ():
+	print
+	# get the dvd device, default to /dev/dvd/
+	dvddev = raw_input ("DVD device [/dev/dvd]: ")
+	if dvddev.strip () == "":
+		dvddev = "/dev/dvd"
+
+	# get the title in the dvd to rip
+	stitle = raw_input ("Title # to rip: ")
+	try:
+		title = int (stitle)
+	except ValueError:
+		print "No title specified. Defaulting to 1"
+		title = 1
+
+	# ask if all chapters are to be ripped from the title
+	allchap = raw_input ("Rip all chapters in title? [Y]: ")
+	if allchap.strip () == "":
+		allchap = "Y"
+
+	if allchap <> "Y" and allchap <> "y":
+		# get the starting and ending chapter, if all chapters not specified
+		sstartchap = raw_input ("Starting chapter #: ")
+		sendchapter = raw_input ("Ending chapter #: ")
+		try:
+			startchap, endchap = int (sstartchap), int (sendchapter)
+		except ValueError:
+			print "Invalid chapter numbers. Assuming all chapters."
+			allchap = "Y"
+
+	# get the scaling parameters
+	scale, width, height = get_video_scale ()
+
+	# get the video bitrate
+	bitrate = get_bitrate ()
+
+	output = raw_input ("Output file: ")
+	if output.strip () == "":
+		print "No output specified. Aborting!"
+		return
+
+	twopass = raw_input ("Do you wish to do 2-pass encoding? [N]: ")
+	if twopass == "Y" or twopass == "y":
+		passes = 2
+	else:
+		passes = 1
+
+	# build the mencoder command
+	for i in range (passes):
+		menc_command = []
+		menc_command.append ("mencoder")
+		menc_command.append ("dvd://" + str(title))
+		menc_command.append ("-dvd-device")
+		menc_command.append (dvddev)
+
+		if allchap <> "Y" and allchap <> "y":
+			menc_command.append ("-chapter")
+			menc_command.append (str(startchap) + "-" + str(endchap))
+		if scale == "Y" or scale == "y":
+			menc_command.append ("-vf")
+			menc_command.append ("scale=" + str(width) + ":" + str(height))
+
+		menc_command.append ("-o")
+		# if two pass encoding is specified depending on the pass, encode
+		if twopass == "Y" or twopass == "y":
+			if i == 0:
+				if sys.platform.startswith ('win'):
+					menc_command.append ("NUL")
+				else:
+					menc_command.append ("/dev/null")
+			else:
+				menc_command.append ("temp_dvddump.mp4")
+		else:
+			menc_command.append ("temp_dvddump.mp4")
+
+		menc_command.append ("-of")
+		menc_command.append ("lavf")
+		menc_command.append ("-lavfopts")
+		menc_command.append ("format=mp4")
+		menc_command.append ("-ovc")
+		menc_command.append ("lavc")
+		menc_command.append ("-lavcopts")
+
+		# if two pass encoding is specified then depending on the pass
+		if twopass == "Y" or twopass == "y":
+			if i == 0:
+				menc_command.append ("vpass=1:turbo:vcodec=mpeg4:vbitrate=" + str(bitrate))
+			else:
+				menc_command.append ("vpass=2:vcodec=mpeg4:vbitrate=" + str(bitrate))
+		else:
+			menc_command.append ("vcodec=mpeg4:vbitrate=" + str(bitrate))
+
+		menc_command.append ("-oac")
+		menc_command.append ("lavc")
+
+		proc = subprocess.Popen (menc_command)
+		proc.wait ()
+
+	# use ffmpeg to remux and fix the problem with the muxing in mencoder
+	# and incidentally convert audio to faac
+	ffmpeg_command = ["ffmpeg",]
+	ffmpeg_command.append ("-i")
+	ffmpeg_command.append ("temp_dvddump.mp4")
+	ffmpeg_command.append ("-acodec")
+	ffmpeg_command.append ("libfaac")
+	ffmpeg_command.append ("-ab")
+	ffmpeg_command.append ("92k")
+	ffmpeg_command.append ("-vcodec")
+	ffmpeg_command.append ("copy")
+	ffmpeg_command.append (output)
+
+	# run the ffmpeg command
+	proc2 = subprocess.Popen (ffmpeg_command)
+	proc2.wait ()
+
+	# delete the temporary file
+	os.remove ("temp_dvddump.mp4")
+	# delete the 2 pass log
+	if os.path.exists ("divx2pass.log"):
+		os.remove ("divx2pass.log")
+
+def encode_files ():
+	print
+	in_files = []
+
+	# get the input files
+	in_file = raw_input ("Input file: ")
+	if in_file.strip () == "":
+		print "No input file specified. Aborting!"
+		return
+
+	in_files.append (in_file)
+
+	# multiple input files?
+	while 1:
+		in_file = raw_input ("Another input file (leave blank to finish): ")
+		if in_file.strip () == "":
+			break
+		in_files.append (in_file)
+
+	# get the video scaling parameters
+	scale, width, height = get_video_scale ()
+
+	# get the bitrate
+	bitrate = get_bitrate ()
+
+	# get output file
+	output_file = raw_input ("Output file: ")
+	if output_file.strip () == "":
+		print "No output file specified. Aborting!"
+		return
+
+	twopass = raw_input ("Do you wish to do 2-pass encoding? [N]: ")
+	if twopass == "Y" or twopass == "y":
+		passes = 2
+	else:
+		passes = 1
+
+	# build the mencoder command
+	for i in range (passes):
+		menc_command = []
+		menc_command.append ("mencoder")
+		menc_command.append ("-o")
+		if twopass == "Y" or twopass == "y":
+			if i == 0:
+				if sys.platform.startswith ('win'):
+					menc_command.append ("NUL")
+				else:
+					menc_command.append ("/dev/null")
+			else:
+				menc_command.append ("temp_filedump.mp4")
+		else:
+			menc_command.append ("temp_filedump.mp4")
+
+		menc_command.append ("-of")
+		menc_command.append ("lavf")
+		menc_command.append ("-lavfopts")
+		menc_command.append ("format=mp4")
+		menc_command.append ("-ovc")
+		menc_command.append ("lavc")
+		menc_command.append ("-lavcopts")
+
+		if twopass == "Y" or twopass == "y":
+			if i == 0:
+				menc_command.append ("vpass=1:turbo:vcodec=mpeg4:vbitrate=" + str(bitrate))
+			else:
+				menc_command.append ("vpass=2:vcodec=mpeg4:vbitrate=" + str(bitrate))
+		else:
+			menc_command.append ("vcodec=mpeg4:vbitrate=" + str(bitrate))
+
+		menc_command.append ("-oac")
+		menc_command.append ("lavc")
+
+		for infile in in_files:
+			menc_command.append (infile)
+			if scale == "Y" or scale == "y":
+				menc_command.append ("-vf")
+				menc_command.append ("scale=" + str(width) + ":" + str(height))
+
+		# execute the mencoder command joining input files together into
+		# the resultant output file
+		proc = subprocess.Popen (menc_command)
+		proc.wait ()
+
+	# run ffmpeg to remux and correct the problem with the mp4 muxing
+	# in mencoder and incidentally convert audio to faac
+	ffmpeg_command = ["ffmpeg",]
+	ffmpeg_command.append ("-i")
+	ffmpeg_command.append ("temp_filedump.mp4")
+	ffmpeg_command.append ("-acodec")
+	ffmpeg_command.append ("libfaac")
+	ffmpeg_command.append ("-ab")
+	ffmpeg_command.append ("92k")
+	ffmpeg_command.append ("-vcodec")
+	ffmpeg_command.append ("copy")
+	ffmpeg_command.append (output_file)
+
+	# execute the ffmpeg command
+	proc2 = subprocess.Popen (ffmpeg_command)
+	proc2.wait ()
+
+	# delete the temporary file
+	os.remove ("temp_filedump.mp4")
+	# delete the 2 pass log
+	if os.path.exists ("divx2pass.log"):
+		os.remove ("divx2pass.log")
+
+def main_menu ():
+
+	while 1:
+		# main menu
+		print
+		print     """dvd2mp4rip Copyright (C) 2011  V.Harishankar
+This program comes with ABSOLUTELY NO WARRANTY;
+This is free software, and you are welcome to redistribute it under
+certain conditions; See http://www.gnu.org/licenses/gpl-3.0"""
+		print
+		print 'Requires: mencoder and ffmpeg with appropriate codecs'
+		print
+		print "1. Rip and encode from DVD"
+		print "2. Encode from file(s)"
+		print "3. Exit"
+		ch = raw_input ('Choice: ')
+		if ch == '1':
+			rip_dvd ()
+		if ch == '2':
+			encode_files ()
+		if ch == '3':
+			break
+
+# Main function
+def main ():
+	main_menu ()
+
+main ()
